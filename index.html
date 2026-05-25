@@ -3,72 +3,101 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebUSB Fastboot 擦除工具</title>
+    <title>WebUSB 终极刷机神器 (Wipe & Flash)</title>
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: monospace; padding: 20px; max-width: 800px; margin: 0 auto; }
-        h1 { color: #58a6ff; }
+        h1 { color: #58a6ff; text-align: center; margin-bottom: 30px;}
         .panel { border: 1px solid #30363d; padding: 20px; border-radius: 8px; margin-bottom: 20px; background: #161b22; }
-        button { background-color: #238636; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 6px; cursor: pointer; margin-right: 10px; font-weight: bold; }
-        button:hover { background-color: #2ea043; }
+        .panel-title { color: #8b949e; font-size: 14px; margin-top: 0; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
+        .flex-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #30363d; }
+        .flex-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        
+        button { background-color: #238636; color: white; border: none; padding: 8px 16px; font-size: 14px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s;}
+        button:hover { filter: brightness(1.2); }
         button:disabled { background-color: #4b535c; cursor: not-allowed; color: #8b949e; }
+        
         .danger-btn { background-color: #da3633; }
-        .danger-btn:hover { background-color: #f85149; }
-        #log { width: 100%; height: 300px; background: #010409; color: #00ff00; border: 1px solid #30363d; padding: 10px; overflow-y: scroll; box-sizing: border-box; font-size: 14px; }
-        .warning { color: #f85149; font-weight: bold; }
+        .flash-btn { background-color: #8957e5; }
+        input[type="file"] { color: #8b949e; font-family: monospace; }
+        
+        #log { width: 100%; height: 300px; background: #010409; color: #00ff00; border: 1px solid #30363d; padding: 10px; overflow-y: scroll; box-sizing: border-box; font-size: 13px; border-radius: 6px;}
+        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 12px; background: #30363d; font-size: 12px; margin-left: 15px; }
     </style>
 </head>
 <body>
 
     <h1>⚡ WebUSB Fastboot Tool</h1>
+    
     <div class="panel">
-        <p>1. 请使用 OTG 数据线连接目标手机。</p>
-        <p>2. 确保目标手机已处于 <strong>Fastboot 模式</strong> (Bootloader)。</p>
-        <button id="btnConnect">🔗 连接设备</button>
-        <span id="status">未连接</span>
+        <button id="btnConnect">🔗 连接 Fastboot 设备</button>
+        <span class="status-badge" id="status">🔴 未连接</span>
     </div>
 
     <div class="panel">
-        <p class="warning">⚠️ 极度危险：以下操作将瞬间清空设备的所有物理数据，且不可逆！</p>
-        <button id="btnErase" class="danger-btn" disabled>🔥 一键物理擦除 (Userdata & Metadata)</button>
-        <button id="btnReboot" disabled>🔄 重启设备</button>
+        <h3 class="panel-title">🛠️ 物理擦除 (恢复出厂)</h3>
+        <div class="flex-row">
+            <span>彻底清空用户数据及加密密钥 (不可逆)</span>
+            <button id="btnErase" class="danger-btn" disabled>🔥 一键物理擦除</button>
+        </div>
     </div>
 
-    <textarea id="log" readonly>等待操作...</textarea>
+    <div class="panel">
+        <h3 class="panel-title">📦 核心分区刷写</h3>
+        <div class="flex-row">
+            <div>
+                <strong>[boot] 分区:</strong><br>
+                <input type="file" id="fileBoot" accept=".img">
+            </div>
+            <button id="btnFlashBoot" class="flash-btn" disabled>刷入 boot</button>
+        </div>
+        <div class="flex-row">
+            <div>
+                <strong>[init_boot] 分区:</strong><br>
+                <input type="file" id="fileInitBoot" accept=".img">
+            </div>
+            <button id="btnFlashInitBoot" class="flash-btn" disabled>刷入 init_boot</button>
+        </div>
+    </div>
+
+    <div class="panel" style="text-align: right;">
+        <button id="btnReboot" disabled>🔄 重启系统</button>
+    </div>
+
+    <textarea id="log" readonly>等待设备连接...</textarea>
 
     <script>
+        if (!navigator.usb) {
+            alert("⚠️ 环境错误！\n必须通过 HTTPS 访问，且需使用最新版 Chrome/Edge 浏览器。");
+        }
+
         let device = null;
         let epIn = null;
         let epOut = null;
 
-        const logEl = document.getElementById('log');
-        const btnConnect = document.getElementById('btnConnect');
-        const btnErase = document.getElementById('btnErase');
-        const btnReboot = document.getElementById('btnReboot');
-        const statusEl = document.getElementById('status');
+        const ui = {
+            log: document.getElementById('log'),
+            status: document.getElementById('status'),
+            btnConnect: document.getElementById('btnConnect'),
+            btnErase: document.getElementById('btnErase'),
+            btnFlashBoot: document.getElementById('btnFlashBoot'),
+            btnFlashInitBoot: document.getElementById('btnFlashInitBoot'),
+            btnReboot: document.getElementById('btnReboot'),
+            fileBoot: document.getElementById('fileBoot'),
+            fileInitBoot: document.getElementById('fileInitBoot')
+        };
 
         function log(msg) {
-            logEl.value += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
-            logEl.scrollTop = logEl.scrollHeight;
+            ui.log.value += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
+            ui.log.scrollTop = ui.log.scrollHeight;
         }
 
-        // Fastboot USB 协议标准：Class 0xff, Subclass 0x42, Protocol 0x03
-        const FASTBOOT_FILTERS = [
-            { classCode: 255, subclassCode: 66, protocolCode: 3 }
-        ];
-
-        btnConnect.addEventListener('click', async () => {
+        // --- 1. USB 连接逻辑 ---
+        ui.btnConnect.addEventListener('click', async () => {
             try {
-                log("请求 USB 设备权限...");
-                // 唤起浏览器的 USB 选择菜单
-                device = await navigator.usb.requestDevice({ filters: FASTBOOT_FILTERS });
-                log(`已选择设备: ${device.productName} (${device.manufacturerName})`);
-
+                device = await navigator.usb.requestDevice({ filters: [{ classCode: 255, subclassCode: 66, protocolCode: 3 }] });
                 await device.open();
-                if (device.configuration === null) {
-                    await device.selectConfiguration(1);
-                }
+                if (device.configuration === null) await device.selectConfiguration(1);
 
-                // 遍历寻找 Fastboot 的接口和端点 (Endpoint)
                 let interfaceNumber = -1;
                 for (const config of device.configurations) {
                     for (const iface of config.interfaces) {
@@ -85,75 +114,126 @@
                     }
                 }
 
-                if (interfaceNumber === -1 || epIn === null || epOut === null) {
-                    throw new Error("未能找到标准的 Fastboot USB 端点，设备可能不兼容。");
-                }
-
+                if (interfaceNumber === -1) throw new Error("未找到 Fastboot 接口");
                 await device.claimInterface(interfaceNumber);
-                log(`✅ 设备已就绪！(IN: ${epIn}, OUT: ${epOut})`);
                 
-                statusEl.innerText = `已连接: ${device.productName}`;
-                statusEl.style.color = '#00ff00';
-                btnErase.disabled = false;
-                btnReboot.disabled = false;
-                btnConnect.disabled = true;
+                ui.status.innerText = `🟢 已连接: ${device.productName}`;
+                ui.status.style.color = '#3fb950';
+                
+                // 解锁 UI 按钮
+                ui.btnConnect.disabled = true;
+                ui.btnErase.disabled = false;
+                ui.btnReboot.disabled = false;
+                ui.fileBoot.addEventListener('change', () => ui.btnFlashBoot.disabled = !ui.fileBoot.files[0]);
+                ui.fileInitBoot.addEventListener('change', () => ui.btnFlashInitBoot.disabled = !ui.fileInitBoot.files[0]);
 
+                log(`✅ 设备握手成功！准备就绪。`);
             } catch (e) {
                 log(`❌ 连接失败: ${e.message}`);
             }
         });
 
-        // Fastboot 核心通信逻辑
-        async function sendCommand(cmd) {
-            if (!device) return;
-            log(`> 发送指令: ${cmd}`);
-            
+        // --- 2. Fastboot 文本指令收发 ---
+        async function sendCommandAndRead(cmd) {
             const encoder = new TextEncoder();
-            const data = encoder.encode(cmd);
-            
-            // 1. 发送指令到 OUT 端点
-            await device.transferOut(epOut, data);
-
-            // 2. 循环读取 IN 端点的响应
             const decoder = new TextDecoder();
+            await device.transferOut(epOut, encoder.encode(cmd));
+            
             while (true) {
-                // 读取 64 字节数据包 (Fastboot 默认 packet 限制)
-                const result = await device.transferIn(epIn, 64);
-                const response = decoder.decode(result.data);
-                log(`< 收到响应: ${response}`);
-
-                // Fastboot 协议：以 OKAY, FAIL 结尾代表单次任务结束
-                if (response.startsWith("OKAY") || response.startsWith("FAIL")) {
-                    break;
+                const res = await device.transferIn(epIn, 64);
+                const text = decoder.decode(res.data);
+                log(`< 响应: ${text}`);
+                if (text.startsWith("OKAY") || text.startsWith("FAIL") || text.startsWith("DATA")) {
+                    return text;
                 }
-                // 如果是 INFO 打头的日志，继续循环读取下一个响应包
             }
         }
 
-        btnErase.addEventListener('click', async () => {
-            if (!confirm("⚠️ 确定要擦除设备吗？此操作无法撤销！")) return;
+        // --- 3. 擦除功能 (Wipe) ---
+        ui.btnErase.addEventListener('click', async () => {
+            if (!confirm("⚠️ 极度危险：确定要擦除 userdata 和 metadata 吗？此操作无法撤销！")) return;
             try {
-                btnErase.disabled = true;
-                log("===============================");
-                log("开始底层物理擦除...");
+                ui.btnErase.disabled = true;
+                log(`\n================================`);
+                log(`🔥 开始物理擦除...`);
                 
-                await sendCommand("erase:userdata");
-                await sendCommand("erase:metadata");
+                await sendCommandAndRead("erase:userdata");
+                await sendCommandAndRead("erase:metadata");
+                // 忽略 cache 擦除报错（现代设备无独立 cache 分区）
+                try { await sendCommandAndRead("erase:cache"); } catch(e){}
                 
-                log("===============================");
-                log("擦除指令执行完毕！");
+                log(`✅ 擦除任务执行完毕！`);
             } catch (e) {
                 log(`❌ 擦除出错: ${e.message}`);
+            } finally {
+                ui.btnErase.disabled = false;
+                log(`================================\n`);
             }
         });
 
-        btnReboot.addEventListener('click', async () => {
+        // --- 4. 刷写功能 (Flash) ---
+        async function flashPartition(partition, fileInfo) {
+            if (!device) return;
             try {
-                await sendCommand("reboot");
-                log("🔄 已发送重启指令。连接将自动断开。");
+                // 锁定按钮状态
+                ui.btnErase.disabled = true;
+                ui.btnFlashBoot.disabled = true;
+                ui.btnFlashInitBoot.disabled = true;
+
+                log(`\n================================`);
+                log(`📦 正在读取 ${partition} 镜像: ${fileInfo.name}...`);
+                const buffer = await fileInfo.arrayBuffer();
+                
+                const sizeHex = buffer.byteLength.toString(16).padStart(8, '0');
+                log(`🚀 申请传输通道 (大小: ${buffer.byteLength} Bytes)...`);
+                
+                const reply = await sendCommandAndRead(`download:${sizeHex}`);
+                if (!reply.startsWith("DATA")) throw new Error("设备拒绝了传输请求");
+
+                log(`⏳ 正在灌入二进制流...`);
+                const chunkSize = 1024 * 1024; // 1MB 分块
+                let offset = 0;
+                while (offset < buffer.byteLength) {
+                    const chunk = buffer.slice(offset, offset + chunkSize);
+                    await device.transferOut(epOut, chunk);
+                    offset += chunk.byteLength;
+                }
+                
+                log(`🔍 校验传输完整性...`);
+                const decoder = new TextDecoder();
+                const res = await device.transferIn(epIn, 64);
+                const checkText = decoder.decode(res.data);
+                log(`< 校验响应: ${checkText}`);
+                if (!checkText.startsWith("OKAY")) throw new Error("数据校验失败");
+
+                log(`🔥 写入主板闪存...`);
+                const flashReply = await sendCommandAndRead(`flash:${partition}`);
+                if (flashReply.startsWith("OKAY")) {
+                    log(`✅ [${partition}] 刷写成功！`);
+                } else {
+                    throw new Error(`写入被拒绝: ${flashReply}`);
+                }
+
             } catch (e) {
-                log(`❌ 重启出错: ${e.message}`);
+                log(`❌ 刷写中止: ${e.message}`);
+            } finally {
+                // 恢复按钮状态
+                ui.btnErase.disabled = false;
+                ui.btnFlashBoot.disabled = !ui.fileBoot.files[0];
+                ui.btnFlashInitBoot.disabled = !ui.fileInitBoot.files[0];
+                log(`================================\n`);
             }
+        }
+
+        ui.btnFlashBoot.addEventListener('click', () => flashPartition('boot', ui.fileBoot.files[0]));
+        ui.btnFlashInitBoot.addEventListener('click', () => flashPartition('init_boot', ui.fileInitBoot.files[0]));
+        
+        // --- 5. 重启功能 ---
+        ui.btnReboot.addEventListener('click', async () => {
+            log(`\n🔄 正在下达重启指令...`);
+            await sendCommandAndRead("reboot");
+            ui.status.innerText = `🔴 设备已离线`;
+            ui.status.style.color = '#8b949e';
         });
     </script>
 </body>
