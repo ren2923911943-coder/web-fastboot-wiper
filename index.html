@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebUSB 终极刷机神器 (Wipe & Flash)</title>
+    <title>ENEN WEB FLASH</title>
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: monospace; padding: 20px; max-width: 800px; margin: 0 auto; }
         h1 { color: #58a6ff; text-align: center; margin-bottom: 30px;}
@@ -29,20 +29,20 @@
     <h1>⚡ WebUSB Fastboot Tool</h1>
     
     <div class="panel">
-        <button id="btnConnect">🔗 连接 Fastboot 设备</button>
+        <button id="btnConnect">连接 Fastboot 设备</button>
         <span class="status-badge" id="status">🔴 未连接</span>
     </div>
 
     <div class="panel">
-        <h3 class="panel-title">🛠️ 物理擦除 (恢复出厂)</h3>
+        <h3 class="panel-title">格式化</h3>
         <div class="flex-row">
-            <span>彻底清空用户数据及加密密钥 (不可逆)</span>
-            <button id="btnErase" class="danger-btn" disabled>🔥 一键物理擦除</button>
+            <span>彻底清空用户数据及 (不可逆)</span>
+            <button id="btnErase" class="danger-btn" disabled>一键格式化</button>
         </div>
     </div>
 
     <div class="panel">
-        <h3 class="panel-title">📦 核心分区刷写</h3>
+        <h3 class="panel-title">核心分区刷写</h3>
         <div class="flex-row">
             <div>
                 <strong>[boot] 分区:</strong><br>
@@ -60,7 +60,7 @@
     </div>
 
     <div class="panel" style="text-align: right;">
-        <button id="btnReboot" disabled>🔄 重启系统</button>
+        <button id="btnReboot" disabled>重启系统</button>
     </div>
 
     <textarea id="log" readonly>等待设备连接...</textarea>
@@ -127,9 +127,9 @@
                 ui.fileBoot.addEventListener('change', () => ui.btnFlashBoot.disabled = !ui.fileBoot.files[0]);
                 ui.fileInitBoot.addEventListener('change', () => ui.btnFlashInitBoot.disabled = !ui.fileInitBoot.files[0]);
 
-                log(`✅ 设备握手成功！准备就绪。`);
+                log(`设备连接成功！准备就绪。`);
             } catch (e) {
-                log(`❌ 连接失败: ${e.message}`);
+                log(`连接失败: ${e.message}`);
             }
         });
 
@@ -151,11 +151,11 @@
 
         // --- 3. 擦除功能 (Wipe) ---
         ui.btnErase.addEventListener('click', async () => {
-            if (!confirm("⚠️ 极度危险：确定要擦除 userdata 和 metadata 吗？此操作无法撤销！")) return;
+            if (!confirm("此操作无法撤销！")) return;
             try {
                 ui.btnErase.disabled = true;
                 log(`\n================================`);
-                log(`🔥 开始物理擦除...`);
+                log(`开始格式化...`);
                 
                 await sendCommandAndRead("erase:userdata");
                 await sendCommandAndRead("erase:metadata");
@@ -181,16 +181,16 @@
                 ui.btnFlashInitBoot.disabled = true;
 
                 log(`\n================================`);
-                log(`📦 正在读取 ${partition} 镜像: ${fileInfo.name}...`);
+                log(`正在读取 ${partition} 镜像: ${fileInfo.name}...`);
                 const buffer = await fileInfo.arrayBuffer();
                 
                 const sizeHex = buffer.byteLength.toString(16).padStart(8, '0');
-                log(`🚀 申请传输通道 (大小: ${buffer.byteLength} Bytes)...`);
+                log(`申请传输通道 (大小: ${buffer.byteLength} Bytes)...`);
                 
                 const reply = await sendCommandAndRead(`download:${sizeHex}`);
                 if (!reply.startsWith("DATA")) throw new Error("设备拒绝了传输请求");
 
-                log(`⏳ 正在灌入二进制流...`);
+                log(`正在加载...`);
                 const chunkSize = 1024 * 1024; // 1MB 分块
                 let offset = 0;
                 while (offset < buffer.byteLength) {
@@ -199,14 +199,14 @@
                     offset += chunk.byteLength;
                 }
                 
-                log(`🔍 校验传输完整性...`);
+                log(`校验传输完整性...`);
                 const decoder = new TextDecoder();
                 const res = await device.transferIn(epIn, 64);
                 const checkText = decoder.decode(res.data);
                 log(`< 校验响应: ${checkText}`);
                 if (!checkText.startsWith("OKAY")) throw new Error("数据校验失败");
 
-                log(`🔥 写入主板闪存...`);
+                log(`写入主板闪存...`);
                 const flashReply = await sendCommandAndRead(`flash:${partition}`);
                 if (flashReply.startsWith("OKAY")) {
                     log(`✅ [${partition}] 刷写成功！`);
@@ -230,7 +230,7 @@
         
         // --- 5. 重启功能 ---
         ui.btnReboot.addEventListener('click', async () => {
-            log(`\n🔄 正在下达重启指令...`);
+            log(`\n正在下达重启指令...`);
             await sendCommandAndRead("reboot");
             ui.status.innerText = `🔴 设备已离线`;
             ui.status.style.color = '#8b949e';
