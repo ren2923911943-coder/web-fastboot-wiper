@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebUSB Fastboot 擦除工具</title>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: monospace; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { color: #58a6ff; }
+        .panel { border: 1px solid #30363d; padding: 20px; border-radius: 8px; margin-bottom: 20px; background: #161b22; }
+        button { background-color: #238636; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 6px; cursor: pointer; margin-right: 10px; font-weight: bold; }
+        button:hover { background-color: #2ea043; }
+        button:disabled { background-color: #4b535c; cursor: not-allowed; color: #8b949e; }
+        .danger-btn { background-color: #da3633; }
+        .danger-btn:hover { background-color: #f85149; }
+        #log { width: 100%; height: 300px; background: #010409; color: #00ff00; border: 1px solid #30363d; padding: 10px; overflow-y: scroll; box-sizing: border-box; font-size: 14px; }
+        .warning { color: #f85149; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>⚡ WebUSB Fastboot Tool</h1>
+    <div class="panel">
+        <p>1. 请使用 OTG 数据线连接目标手机。</p>
+        <p>2. 确保目标手机已处于 <strong>Fastboot 模式</strong> (Bootloader)。</p>
+        <button id="btnConnect">🔗 连接设备</button>
+        <span id="status">未连接</span>
+    </div>
+
+    <div class="panel">
+        <p class="warning">⚠️ 极度危险：以下操作将瞬间清空设备的所有物理数据，且不可逆！</p>
+        <button id="btnErase" class="danger-btn" disabled>🔥 一键物理擦除 (Userdata & Metadata)</button>
+        <button id="btnReboot" disabled>🔄 重启设备</button>
+    </div>
+
+    <textarea id="log" readonly>等待操作...</textarea>
+
+    <script>
+        let device = null;
+        let epIn = null;
+        let epOut = null;
+
+        const logEl = document.getElementById('log');
+        const btnConnect = document.getElementById('btnConnect');
+        const btnErase = document.getElementById('btnErase');
+        const btnReboot = document.getElementById('btnReboot');
+        const statusEl = document.getElementById('status');
+
+        function log(msg) {
+            logEl.value += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // Fastboot USB 协议标准：Class 0xff, Subclass 0x42, Protocol 0x03
+        const FASTBOOT_FILTERS = [
+            { classCode: 255, subclassCode: 66, protocolCode: 3 }
+        ];
+
+        btnConnect.addEventListener('click', async () => {
+            try {
+                log("请求 USB 设备权限...");
+                // 唤起浏览器的 USB 选择菜单
+                device = await navigator.usb.requestDevice({ filters: FASTBOOT_FILTERS });
+                log(`已选择设备: ${device.productName} (${device.manufacturerName})`);
+
+                await device.open();
+                if (device.configuration === null) {
+                    await device.selectConfiguration(1);
+                }
+
+                // 遍历寻找 Fastboot 的接口和端点 (Endpoint)
+                let interfaceNumber = -1;
+                for (const config of device.configurations) {
+                    for (const iface of config.interfaces) {
+                        for (const alt of iface.alternates) {
+                            if (alt.interfaceClass === 255 && alt.interfaceSubclass === 66 && alt.interfaceProtocol === 3) {
+                                interfaceNumber = iface.interfaceNumber;
+                                for (const ep of alt.endpoints) {
+                                    if (ep.direction === 'in') epIn = ep.endpointNumber;
+                                    if (ep.direction === 'out') epOut = ep.endpointNumber;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (interfaceNumber === -1 || epIn === null || epOut === null) {
+                    throw new Error("未能找到标准的 Fastboot USB 端点，设备可能不兼容。");
+                }
+
+                await device.claimInterface(interfaceNumber);
+                log(`✅ 设备已就绪！(IN: ${epIn}, OUT: ${epOut})`);
+                
+                statusEl.innerText = `已连接: ${device.productName}`;
+                statusEl.style.color = '#00ff00';
+                btnErase.disabled = false;
+                btnReboot.disabled = false;
+                btnConnect.disabled = true;
+
+            } catch (e) {
+                log(`❌ 连接失败: ${e.message}`);
+            }
+        });
+
+        // Fastboot 核心通信逻辑
+        async function sendCommand(cmd) {
+            if (!device) return;
+            log(`> 发送指令: ${cmd}`);
+            
+            const encoder = new TextEncoder();
+            const data = encoder.encode(cmd);
+            
+            // 1. 发送指令到 OUT 端点
+            await device.transferOut(epOut, data);
+
+            // 2. 循环读取 IN 端点的响应
+            const decoder = new TextDecoder();
+            while (true) {
+                // 读取 64 字节数据包 (Fastboot 默认 packet 限制)
+                const result = await device.transferIn(epIn, 64);
+                const response = decoder.decode(result.data);
+                log(`< 收到响应: ${response}`);
+
+                // Fastboot 协议：以 OKAY, FAIL 结尾代表单次任务结束
+                if (response.startsWith("OKAY") || response.startsWith("FAIL")) {
+                    break;
+                }
+                // 如果是 INFO 打头的日志，继续循环读取下一个响应包
+            }
+        }
+
+        btnErase.addEventListener('click', async () => {
+            if (!confirm("⚠️ 确定要擦除设备吗？此操作无法撤销！")) return;
+            try {
+                btnErase.disabled = true;
+                log("===============================");
+                log("开始底层物理擦除...");
+                
+                await sendCommand("erase:userdata");
+                await sendCommand("erase:metadata");
+                
+                log("===============================");
+                log("擦除指令执行完毕！");
+            } catch (e) {
+                log(`❌ 擦除出错: ${e.message}`);
+            }
+        });
+
+        btnReboot.addEventListener('click', async () => {
+            try {
+                await sendCommand("reboot");
+                log("🔄 已发送重启指令。连接将自动断开。");
+            } catch (e) {
+                log(`❌ 重启出错: ${e.message}`);
+            }
+        });
+    </script>
+</body>
+</html>
